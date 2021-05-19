@@ -17,8 +17,26 @@ class Sender(BasicSender.BasicSender):
 
     # Main sending loop.
     def start(self):
-        # add things here
-        pass
+        packet_num = 0
+        packet_text = ""
+        next_packet_text = self.infile.read(1024)
+        running = True
+        packet = self.make_packet("syn", packet_num, packet_text)
+        while True:
+            ack = ""
+            while not ack:
+                self.send(packet)
+                ack = self.receive(timeout=0.5)
+            if not running: break
+            packet_text = next_packet_text
+            packet_num += 1
+            next_packet_text = self.infile.read(1024)
+            if not next_packet_text:
+                packet = self.make_packet("fin", packet_num, packet_text)
+                running = False
+            else:
+                packet = self.make_packet("dat", packet_num, packet_text)
+        self.infile.close()
 
 
 '''
