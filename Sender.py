@@ -1,5 +1,6 @@
 import sys
 import getopt
+from collections import defaultdict
 
 import Checksum
 import BasicSender
@@ -14,29 +15,88 @@ class Sender(BasicSender.BasicSender):
         super(Sender, self).__init__(dest, port, filename, debug)
         self.sackMode = sackMode
         self.debug = debug
+        self.packet_size = 1400
+        self.window_size = 7
+        self.timeout = 0.5
+        self.ack_counter = defaultdict(int)
+        self.truly_received = -1  # denotes index
+        self.seqno = 0
 
     # Main sending loop.
     def start(self):
-        packet_num = 0
-        packet_text = ""
-        next_packet_text = self.infile.read(1024)
-        running = True
-        packet = self.make_packet("syn", packet_num, packet_text)
-        while True:
-            ack = ""
-            while not ack:
-                self.send(packet)
-                ack = self.receive(timeout=0.5)
-            if not running: break
-            packet_text = next_packet_text
-            packet_num += 1
-            next_packet_text = self.infile.read(1024)
-            if not next_packet_text:
-                packet = self.make_packet("fin", packet_num, packet_text)
-                running = False
-            else:
-                packet = self.make_packet("dat", packet_num, packet_text)
+        self.stop_and_wait_send("syn")
+        self.transmit_data()
+        self.stop_and_wait_send("fin")
         self.infile.close()
+
+    def stop_and_wait_send(self, msg_type):
+        packet = self.make_packet(msg_type, self.seqno, "")
+        while True:
+            self.send(packet)
+            ack = self.receive(timeout=self.timeout)
+            if self.correct_ack(ack): break
+        self.seqno += 1
+        self.truly_received += 1
+
+    def correct_ack(self, ack):
+        if not ack: return False
+        _, seqno, _, _ = self.split_packet(ack)
+        seqno = int(seqno.split(';', 1)[0])
+        return seqno == (self.seqno + 1) and Checksum.validate_checksum(ack)
+
+    def transmit_data(self):
+        num_to_read = self.window_size
+        num_to_send = num_to_read
+        packets = []
+        while True:
+            new_packets, has_more_data = self.read_data(num_to_read)
+            packets += new_packets
+            if not has_more_data and self.truly_received == len(packets): break
+            self.send_packets(packets, num_to_send)
+            ack = self.receive(timeout=self.timeout)
+            num_to_read, num_to_send = self.slide_window(ack)
+
+    def read_data(self, num):
+        packets = []
+        has_more_data = True
+        for _ in range(num):
+            data = self.infile.read(self.packet_size)
+            if not data:
+                has_more_data = False
+                break
+            packet = self.make_packet("dat", self.seqno, data)
+            self.seqno += 1
+            packets.append(packet)
+        return packets, has_more_data
+
+    def send_packets(self, packets, num_to_send):
+        packets_to_send = packets[self.truly_received: self.truly_received + num_to_send]
+        for packet in packets_to_send:
+            self.send(packet)
+
+    def slide_window(self, ack):
+        if not ack:
+            num_to_read = 0
+            num_to_send = self.window_size
+        else:
+            _, seqno, _, _ = self.split_packet(ack)
+            seqno = int(seqno.split(';', 1)[0])
+            if not Checksum.validate_checksum(ack) or seqno <= self.truly_received:
+                num_to_read = num_to_send = 0
+            else:
+                self.ack_counter[seqno] += 1
+                if self.ack_counter[seqno] == 4:
+                    num_to_read = 0
+                    # num_to_send = 1
+                    # self.ack_counter[seqno] = 0
+                    num_to_send = self.window_size
+                    for i in range(self.truly_received + 1, self.truly_received + self.window_size + 1):
+                        self.ack_counter[i] = 0
+                else:
+                    num_to_read = seqno - 1 - self.truly_received
+                    num_to_send = self.window_size#num_to_read
+                    self.truly_received = seqno - 1
+        return num_to_read, num_to_send
 
 
 '''
