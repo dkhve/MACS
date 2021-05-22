@@ -48,13 +48,15 @@ class Sender(BasicSender.BasicSender):
         num_to_read = self.window_size
         num_to_send = num_to_read
         packets = []
+        received_packets = []
         while True:
             new_packets, has_more_data = self.read_data(num_to_read)
             packets += new_packets
+            if self.sackMode: received_packets += [False for _ in new_packets]
             if not has_more_data and self.truly_received == len(packets): break
-            self.send_packets(packets, num_to_send)
+            self.send_packets(packets, num_to_send, received_packets)
             ack = self.receive(timeout=self.timeout)
-            num_to_read, num_to_send = self.slide_window(ack)
+            num_to_read, num_to_send = self.slide_window(ack, received_packets)
 
     def read_data(self, num):
         packets = []
@@ -69,35 +71,41 @@ class Sender(BasicSender.BasicSender):
             packets.append(packet)
         return packets, has_more_data
 
-    def send_packets(self, packets, num_to_send):
+    def send_packets(self, packets, num_to_send, received_packets):
         packets_to_send = packets[self.truly_received: self.truly_received + num_to_send]
-        for packet in packets_to_send:
-            self.send(packet)
+        for i, packet in enumerate(packets_to_send):
+            if not self.sackMode or not received_packets[self.truly_received + i]:
+                self.send(packet)
 
-    def slide_window(self, ack):
-        if not ack:
+    def slide_window(self, ack, received_packets):
+        if ack is None:
             num_to_read = 0
             num_to_send = self.window_size
         else:
-            _, seqno, _, _ = self.split_packet(ack)
-            seqno = int(seqno.split(';', 1)[0])
+            _, raw_seqno, _, _ = self.split_packet(ack)
+            seqno = int(raw_seqno.split(';', 1)[0])
             if not Checksum.validate_checksum(ack) or seqno <= self.truly_received:
                 num_to_read = num_to_send = 0
             else:
+                if self.sackMode:
+                    received_packets_indices = [
+                        int(packet) for packet in raw_seqno.split(';', 1)[1].split(',') if packet
+                    ]
+                    for index in received_packets_indices:
+                        received_packets[index - 1] = True
                 self.ack_counter[seqno] += 1
                 if self.ack_counter[seqno] == 4:
                     num_to_read = 0
                     # num_to_send = 1
                     # self.ack_counter[seqno] = 0
-                    num_to_send = self.window_size
-                    for i in range(self.truly_received + 1, self.truly_received + self.window_size + 1):
-                        self.ack_counter[i] = 0
+                    num_to_send = self.window_size#
+                    for i in range(self.truly_received + 1, self.truly_received + self.window_size + 1):#
+                        self.ack_counter[i] = 0#
                 else:
                     num_to_read = seqno - 1 - self.truly_received
-                    num_to_send = self.window_size#num_to_read
+                    num_to_send = self.window_size  # num_to_read
                     self.truly_received = seqno - 1
         return num_to_read, num_to_send
-
 
 '''
 This will be run if you run this script from the command line. You should not
