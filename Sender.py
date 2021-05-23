@@ -79,14 +79,16 @@ class Sender(BasicSender.BasicSender):
                 self.send(packet)
 
     def slide_window(self, ack, received_packets):
+        num_to_read = 0
         if ack is None:
-            num_to_read = 0
             num_to_send = self.window_size
         else:
             _, raw_seqno, _, _ = self.split_packet(ack)
             seqno = int(raw_seqno.split(';', 1)[0])
-            if seqno <= self.truly_received or not Checksum.validate_checksum(ack):
-                num_to_read = num_to_send = 0
+            if seqno <= self.truly_received:
+                num_to_send = 0
+            elif not Checksum.validate_checksum(ack):
+                num_to_send = 1 #0
             else:
                 if self.sackMode:
                     received_packets_indices = [
@@ -96,7 +98,6 @@ class Sender(BasicSender.BasicSender):
                         received_packets[index - 1] = True
                 self.ack_counter[seqno] += 1
                 if self.ack_counter[seqno] == self.fast_retransmit_limit:
-                    num_to_read = 0
                     num_to_send = 1
                     self.ack_counter[seqno] = 0
                     # num_to_send = self.window_size
