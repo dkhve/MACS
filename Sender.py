@@ -17,6 +17,7 @@ class Sender(BasicSender.BasicSender):
         self.debug = debug
         self.packet_size = 1400
         self.window_size = 7
+        self.fast_retransmit_limit = 4
         self.timeout = 0.5
         self.ack_counter = defaultdict(int)
         self.truly_received = -1  # denotes index
@@ -61,7 +62,7 @@ class Sender(BasicSender.BasicSender):
     def read_data(self, num):
         packets = []
         has_more_data = True
-        for _ in range(num):
+        for _ in xrange(num):
             data = self.infile.read(self.packet_size)
             if not data:
                 has_more_data = False
@@ -84,7 +85,7 @@ class Sender(BasicSender.BasicSender):
         else:
             _, raw_seqno, _, _ = self.split_packet(ack)
             seqno = int(raw_seqno.split(';', 1)[0])
-            if not Checksum.validate_checksum(ack) or seqno <= self.truly_received:
+            if seqno <= self.truly_received or not Checksum.validate_checksum(ack):
                 num_to_read = num_to_send = 0
             else:
                 if self.sackMode:
@@ -94,16 +95,16 @@ class Sender(BasicSender.BasicSender):
                     for index in received_packets_indices:
                         received_packets[index - 1] = True
                 self.ack_counter[seqno] += 1
-                if self.ack_counter[seqno] == 4:
+                if self.ack_counter[seqno] == self.fast_retransmit_limit:
                     num_to_read = 0
-                    # num_to_send = 1
-                    # self.ack_counter[seqno] = 0
-                    num_to_send = self.window_size#
-                    for i in range(self.truly_received + 1, self.truly_received + self.window_size + 1):#
-                        self.ack_counter[i] = 0#
+                    num_to_send = 1
+                    self.ack_counter[seqno] = 0
+                    # num_to_send = self.window_size
+                    # for i in xrange(self.truly_received + 1, self.truly_received + self.window_size + 1):
+                    #     self.ack_counter[i] = 0
                 else:
                     num_to_read = seqno - 1 - self.truly_received
-                    num_to_send = self.window_size  # num_to_read
+                    num_to_send = num_to_read #self.window_size
                     self.truly_received = seqno - 1
         return num_to_read, num_to_send
 
