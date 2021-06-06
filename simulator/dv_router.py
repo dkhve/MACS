@@ -13,6 +13,7 @@ class DVRouter(basics.DVRouterBase):
     NO_LOG = True  # Set to True on an instance to disable its logging
     POISON_MODE = True  # Can override POISON_MODE here
     DEFAULT_TIMER_INTERVAL = 5  # Can override this yourself for testing
+    TIMEOUT = 15
 
     def __init__(self):
         """
@@ -22,7 +23,7 @@ class DVRouter(basics.DVRouterBase):
         """
         # port to latency mapping
         self.ports = {}
-        # host to (destination, port, latency, expire_time)
+        # host to (destination, port, latency, receive_time)
         self.table = {}
         self.start_timer()  # Starts calling handle_timer() at correct rate
 
@@ -50,7 +51,7 @@ class DVRouter(basics.DVRouterBase):
             self.ports.pop(port)
 
         for host in self.table:  # for host in hosts
-            if port == self.table[host][1]:  # if I could reach that host from this port
+            if port == self.table[host][1]:  # if I could reach that entity from this port
                 self.table.pop(host)  # remove that route from my table
                 if self.POISON_MODE:
                     info = basics.RoutePacket(host, INFINITY)  # send that host poisoned route
@@ -67,13 +68,33 @@ class DVRouter(basics.DVRouterBase):
         """
         # self.log("RX %s on %s (%s)", packet, port, api.current_time())
         if isinstance(packet, basics.RoutePacket):
-            pass
+            # if we dont have that destination in table
+            # or if we have it but new route has cheaper cost
+            # or if cost changed due to congestion or some other reason
+            # we should update our table
+            new_cost = self.ports[port] + packet.latency
+            if packet.destination not in self.table or \
+                    new_cost <= self.table[packet.destination][2] or \
+                    self.table[packet.destination][1] == port:
+                self.table[packet.destination] = (packet.dst, port, new_cost, api.current_time())
+                update_packet = basics.RoutePacket(packet.destination, new_cost)
+                self.send(update_packet, port, flood=True)
         elif isinstance(packet, basics.HostDiscoveryPacket):
-            pass
+            # if I don't know about the host or if the new way is cheaper I update the table
+            new_cost = self.ports[port]
+            src = packet.src
+            if src not in self.table or new_cost < self.table[src]:
+                self.table[packet.src] = (packet.dst, port, new_cost, api.current_time())
+                # tell other routers about update
+                update_packet = basics.RoutePacket(packet.src, new_cost)
+                self.send(update_packet, port, flood=True)
         else:
-            # Totally wrong behavior for the sake of demonstration only: send
-            # the packet back to where it came from!
-            self.send(packet, port=port)
+            # it is neither routePacket nor hostDiscover, lets just forward it
+            dest = packet.dst
+            if dest in self.table:
+                _, dest_port, dest_latency, _ = self.table[dest]
+                if dest_latency < INFINITY and port != dest_port:
+                    self.send(packet, dest_port)
 
     def handle_timer(self):
         """
@@ -82,3 +103,25 @@ class DVRouter(basics.DVRouterBase):
         When called, your router should send tables to neighbors.  It also might
         not be a bad place to check for whether any entries have expired.
         """
+        self.remove_expired()
+        # action after expiring
+
+        for host in self.table:
+            # detect neighbor with following logic:
+            # if route to neighbor has same latency as one hop from that route's port then it is a neighbor
+            route_port = self.table[host][1]
+            if route_port in self.ports and self.ports[route_port] == self.table[host][2]:
+                self.send_table(route_port)
+
+    def remove_expired(self):
+        expired = []  # to not mutate collection while iterating
+        for host in self.table:
+            if api.current_time() - self.table[host][3] < self.TIMEOUT:
+                expired.append(host)
+        for host in expired:
+            self.table.pop(host)
+
+    def send_table(self, route_port):
+        for host in self.table:
+            info = basics.RoutePacket(host, self.table[host][2])  # 2 is index of latency
+            self.send(info, route_port)
