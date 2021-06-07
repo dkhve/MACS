@@ -63,7 +63,35 @@ class DVRouter(basics.DVRouterBase):
         """
         self.log("RX %s on %s from %s trace: [%s]", packet, port, packet.src, ', '.join(map(str, packet.trace)))
         if isinstance(packet, basics.RoutePacket):
-            pass
+            dest = packet.destination
+            new_cost = packet.latency + self.ports[port]
+            # momivida mesiji rom me ama da am hosts vwvdebi ama da am costito
+            # tu upro metit vwvdebodi me an tu saertod ver vwvdebodi mashin davaupdateb entriebs da gavugzavni mezoblebs
+            # tu am portidan vwvdebodi, mashin, axali costia es da unda gavugzavno mezoblebs
+            # tu es costi > INFINITY, mashin, vegar vwvdebi da unda wavshalo da poison gavugzavno
+            if dest not in self.table:
+                if new_cost < INFINITY:
+                    self.table[dest] = (port, new_cost, api.current_time())
+                    self.send_info(dest, new_cost)
+            else:
+                old_port, old_cost, _ = self.table[dest]
+                if old_cost >= new_cost:
+                    self.table[dest] = (port, new_cost, api.current_time())
+                    if old_cost > new_cost:
+                        self.send_info(dest, new_cost)
+                elif old_port == port:
+                    if new_cost >= INFINITY:
+                        self.table.pop(dest)
+                        self.send_info(dest, new_cost)
+                    else:
+                        self.table[dest] = (port, new_cost, api.current_time())
+                        self.send_info(dest, new_cost)
+                else:
+                    # if code gets here that means that I have better alternative for sending router
+                    # so let's offer it
+                    info = basics.RoutePacket(dest, self.table[dest][1])
+                    self.send(info, port)
+        #neighboring hosts maybe??
         elif isinstance(packet, basics.HostDiscoveryPacket):
             # differentiate neighboring hosts from neighboring routers
             self.neighboring_hosts.add(port)
@@ -74,8 +102,7 @@ class DVRouter(basics.DVRouterBase):
             self.table[packet.src] = (port, self.ports[port], api.current_time())
 
             # send neighboring routers update
-            info = basics.RoutePacket(packet.src, self.ports[port])
-            self.send(info, self.neighboring_routers)
+            self.send_info(packet.src, self.ports[port])
 
         elif packet.dst in self.table and port != self.table[packet.dst][0]:
             # it is neither routePacket nor hostDiscover, lets just forward it
@@ -90,4 +117,9 @@ class DVRouter(basics.DVRouterBase):
         When called, your router should send tables to neighbors.  It also might
         not be a bad place to check for whether any entries have expired.
         """
+        self.log("TABLE: %s", str(self.table))
         pass
+
+    def send_info(self, dest, latency):
+        info = basics.RoutePacket(dest, latency)
+        self.send(info, self.neighboring_routers)
