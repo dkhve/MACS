@@ -10,7 +10,7 @@ INFINITY = 16
 
 
 class DVRouter(basics.DVRouterBase):
-    NO_LOG = True  # Set to True on an instance to disable its logging
+    NO_LOG = False  # Set to True on an instance to disable its logging
     POISON_MODE = True  # Can override POISON_MODE here
     DEFAULT_TIMER_INTERVAL = 5  # Can override this yourself for testing
     TIMEOUT = 15
@@ -65,11 +65,23 @@ class DVRouter(basics.DVRouterBase):
         if isinstance(packet, basics.RoutePacket):
             pass
         elif isinstance(packet, basics.HostDiscoveryPacket):
+            # differentiate neighboring hosts from neighboring routers
             self.neighboring_hosts.add(port)
             if port in self.neighboring_routers:
                 self.neighboring_routers.remove(port)
-        else:
-            pass
+
+            # add neighboring host to the table
+            self.table[packet.src] = (port, self.ports[port], api.current_time())
+
+            # send neighboring routers update
+            info = basics.RoutePacket(packet.src, self.ports[port])
+            self.send(info, self.neighboring_routers)
+
+        elif packet.dst in self.table and port != self.table[packet.dst][0]:
+            # it is neither routePacket nor hostDiscover, lets just forward it
+            # but we should not send it back in the port where it came from
+            self.log("forwarding: %s on port: %s", packet, str(self.table[packet.dst][0]))
+            self.send(packet, self.table[packet.dst][0])  # 0 is index of port
 
     def handle_timer(self):
         """
