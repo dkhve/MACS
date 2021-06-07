@@ -25,10 +25,8 @@ class DVRouter(basics.DVRouterBase):
         self.ports = {}
         # entity to (port, latency, entry_time) mapping
         self.table = {}
-        # ports on which are neighboring hosts
+        # set of neighboring hosts
         self.neighboring_hosts = set()
-        # ports on which are neighboring routers
-        self.neighboring_router_ports = set()
         self.start_timer()  # Starts calling handle_timer() at correct rate
 
     def handle_link_up(self, port, latency):
@@ -38,7 +36,6 @@ class DVRouter(basics.DVRouterBase):
         The port attached to the link and the link latency are passed in.
         """
         self.ports[port] = latency  # add new link to port-weight dict
-        self.neighboring_router_ports.add(port)
 
         # tell new link what I can reach with what costs
         for entity in self.table:
@@ -54,10 +51,6 @@ class DVRouter(basics.DVRouterBase):
         # remove port from our remembered ports
         if port in self.ports:
             self.ports.pop(port)
-        if port in self.neighboring_router_ports:
-            self.neighboring_router_ports.remove(port)
-        if port in self.neighboring_hosts:
-            self.neighboring_hosts.remove(port)
 
         to_be_removed = []  # to not mutate collection while iterating
         for entity in self.table:  # for entity in entities
@@ -81,12 +74,18 @@ class DVRouter(basics.DVRouterBase):
         You definitely want to fill this in.
         """
         if isinstance(packet, basics.RoutePacket):
+            # arriving message says that neighboring router can reach pack.destination entity with pack.latency cost
+            # from that we can infer that our cost to reach that entity will be-
+            # pack.latency + our cost to neighboring router
+            # now for actions we should take:
+            # if I couldn't reach that entity or reaching cost was higher than new cost
+            # I should update my table and send my neighbors this update
+            # if old route I had for that entity used this port, it means that
+            # cost changed due to congestion or any other reason and so I should update and tell my neighbors
+            # if cost changed so that it is now unreachable I should delete that route from my table
+            # and send poison to neighbors
             dest = packet.destination
             new_cost = packet.latency + self.ports[port]
-            # momivida mesiji rom me ama da am hosts vwvdebi ama da am costito
-            # tu upro metit vwvdebodi me an tu saertod ver vwvdebodi mashin davaupdateb entriebs da gavugzavni mezoblebs
-            # tu am portidan vwvdebodi, mashin, axali costia es da unda gavugzavno mezoblebs
-            # tu es costi > INFINITY, mashin, vegar vwvdebi da unda wavshalo da poison gavugzavno
             if dest not in self.table:
                 if new_cost < INFINITY:
                     self.table[dest] = (port, new_cost, api.current_time())
@@ -115,10 +114,8 @@ class DVRouter(basics.DVRouterBase):
                     self.send(info, port)
 
         elif isinstance(packet, basics.HostDiscoveryPacket):
-            # differentiate neighboring hosts from neighboring routers
+            # save neighboring hosts
             self.neighboring_hosts.add(packet.src)
-            if port in self.neighboring_router_ports:
-                self.neighboring_router_ports.remove(port)
 
             # add neighboring host to the table
             self.table[packet.src] = (port, self.ports[port], api.current_time())
@@ -139,6 +136,7 @@ class DVRouter(basics.DVRouterBase):
         When called, your router should send tables to neighbors.  It also might
         not be a bad place to check for whether any entries have expired.
         """
+        # remove expired records
         self.remove_expired()
 
         # send tables to neighbors
