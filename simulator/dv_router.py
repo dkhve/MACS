@@ -10,7 +10,7 @@ INFINITY = 16
 
 
 class DVRouter(basics.DVRouterBase):
-    NO_LOG = False  # Set to True on an instance to disable its logging
+    NO_LOG = True  # Set to True on an instance to disable its logging
     POISON_MODE = True  # Can override POISON_MODE here
     DEFAULT_TIMER_INTERVAL = 5  # Can override this yourself for testing
     TIMEOUT = 15
@@ -21,7 +21,14 @@ class DVRouter(basics.DVRouterBase):
 
         You probably want to do some additional initialization here.
         """
-        pass
+        # port to latency mapping
+        self.ports = {}
+        # entity to (port, latency, entry_time) mapping
+        self.table = {}
+        # ports on which are neighboring hosts
+        self.neighboring_hosts = set()
+        # ports on which are neighboring routers
+        self.neighboring_routers = set()
         self.start_timer()  # Starts calling handle_timer() at correct rate
 
     def handle_link_up(self, port, latency):
@@ -30,7 +37,12 @@ class DVRouter(basics.DVRouterBase):
 
         The port attached to the link and the link latency are passed in.
         """
-        pass
+        self.ports[port] = latency  # add new link to port-weight dict
+        # we should send our table to new neighboring router
+        # but we shouldn't send it to neighboring host
+        # so let's just save everything as router and
+        # we will differentiate hosts when they send hostDiscoveryPacket
+        self.neighboring_routers.add(port)
 
     def handle_link_down(self, port):
         """
@@ -53,10 +65,11 @@ class DVRouter(basics.DVRouterBase):
         if isinstance(packet, basics.RoutePacket):
             pass
         elif isinstance(packet, basics.HostDiscoveryPacket):
-            pass
+            self.neighboring_hosts.add(port)
+            if port in self.neighboring_routers:
+                self.neighboring_routers.remove(port)
         else:
             pass
-
 
     def handle_timer(self):
         """
@@ -66,5 +79,3 @@ class DVRouter(basics.DVRouterBase):
         not be a bad place to check for whether any entries have expired.
         """
         pass
-
-
