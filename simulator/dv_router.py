@@ -28,7 +28,7 @@ class DVRouter(basics.DVRouterBase):
         # ports on which are neighboring hosts
         self.neighboring_hosts = set()
         # ports on which are neighboring routers
-        self.neighboring_routers = set()
+        self.neighboring_router_ports = set()
         self.start_timer()  # Starts calling handle_timer() at correct rate
 
     def handle_link_up(self, port, latency):
@@ -38,7 +38,7 @@ class DVRouter(basics.DVRouterBase):
         The port attached to the link and the link latency are passed in.
         """
         self.ports[port] = latency  # add new link to port-weight dict
-        self.neighboring_routers.add(port)
+        self.neighboring_router_ports.add(port)
 
         # tell new link what I can reach with what costs
         for entity in self.table:
@@ -54,8 +54,8 @@ class DVRouter(basics.DVRouterBase):
         # remove port from our remembered ports
         if port in self.ports:
             self.ports.pop(port)
-        if port in self.neighboring_routers:
-            self.neighboring_routers.remove(port)
+        if port in self.neighboring_router_ports:
+            self.neighboring_router_ports.remove(port)
         if port in self.neighboring_hosts:
             self.neighboring_hosts.remove(port)
 
@@ -80,7 +80,6 @@ class DVRouter(basics.DVRouterBase):
 
         You definitely want to fill this in.
         """
-        self.log("RX %s on %s from %s trace: [%s]", packet, port, packet.src, ', '.join(map(str, packet.trace)))
         if isinstance(packet, basics.RoutePacket):
             dest = packet.destination
             new_cost = packet.latency + self.ports[port]
@@ -117,9 +116,9 @@ class DVRouter(basics.DVRouterBase):
 
         elif isinstance(packet, basics.HostDiscoveryPacket):
             # differentiate neighboring hosts from neighboring routers
-            self.neighboring_hosts.add(port)
-            if port in self.neighboring_routers:
-                self.neighboring_routers.remove(port)
+            self.neighboring_hosts.add(packet.src)
+            if port in self.neighboring_router_ports:
+                self.neighboring_router_ports.remove(port)
 
             # add neighboring host to the table
             self.table[packet.src] = (port, self.ports[port], api.current_time())
@@ -131,7 +130,6 @@ class DVRouter(basics.DVRouterBase):
         elif packet.dst in self.table and port != self.table[packet.dst][0]:
             # it is neither routePacket nor hostDiscover, lets just forward it
             # but we should not send it back in the port where it came from
-            self.log("forwarding: %s on port: %s", packet, str(self.table[packet.dst][0]))
             self.send(packet, self.table[packet.dst][0])  # 0 is index of port
 
     def handle_timer(self):
@@ -141,18 +139,21 @@ class DVRouter(basics.DVRouterBase):
         When called, your router should send tables to neighbors.  It also might
         not be a bad place to check for whether any entries have expired.
         """
-        self.log("TABLE: %s", str(self.table))
         self.remove_expired()
 
+        # send tables to neighbors
         for entity in self.table:
             info = basics.RoutePacket(entity, self.table[entity][1])  # 1 is index of latency
-            self.send(info, self.table[entity][0], flood=True) # sends packet to all neighbors
+            self.send(info, self.table[entity][0], flood=True)
 
     def remove_expired(self):
         expired = []  # to not mutate collection while iterating
         for entity in self.table:
-            if api.current_time() - self.table[entity][2] > self.TIMEOUT:
+            if api.current_time() - self.table[entity][2] >= self.TIMEOUT:
                 expired.append(entity)  # save expired entity for later removal
         for entity in expired:
-            info = basics.RoutePacket(entity, INFINITY) # tell others that I cant reach that entity anymore
+            # should not delete neighboring hosts because they aren't expected to update their paths
+            if entity not in self.neighboring_hosts:
+                self.table.pop(entity)
+            info = basics.RoutePacket(entity, INFINITY)  # tell others that I cant reach that entity anymore
             self.send(info, flood=True)  # sends packet to all neighbors
