@@ -38,11 +38,12 @@ class DVRouter(basics.DVRouterBase):
         The port attached to the link and the link latency are passed in.
         """
         self.ports[port] = latency  # add new link to port-weight dict
-        # we should send our table to new neighboring router
-        # but we shouldn't send it to neighboring host
-        # so let's just save everything as router and
-        # we will differentiate hosts when they send hostDiscoveryPacket
         self.neighboring_routers.add(port)
+
+        # tell new link what I can reach with what costs
+        for host in self.table:
+            info = basics.RoutePacket(host, self.table[host][1]) #1 is index of latency
+            self.send(info, port)
 
     def handle_link_down(self, port):
         """
@@ -72,21 +73,25 @@ class DVRouter(basics.DVRouterBase):
             if dest not in self.table:
                 if new_cost < INFINITY:
                     self.table[dest] = (port, new_cost, api.current_time())
-                    self.send_info(dest, new_cost)
+                    info = basics.RoutePacket(dest, new_cost)
+                    self.send(info, port, flood=True)
             else:
                 old_port, old_cost, _ = self.table[dest]
                 if old_cost >= new_cost:
                     self.table[dest] = (port, new_cost, api.current_time())
                     if old_cost > new_cost:
-                        self.send_info(dest, new_cost)
+                        info = basics.RoutePacket(dest, new_cost)
+                        self.send(info, port, flood=True)
                 elif old_port == port:
                     if new_cost >= INFINITY:
                         self.table.pop(dest)
-                        self.send_info(dest, new_cost)
+                        info = basics.RoutePacket(dest, new_cost)
+                        self.send(info, port, flood=True)
                     else:
                         self.table[dest] = (port, new_cost, api.current_time())
-                        self.send_info(dest, new_cost)
-                else:
+                        info = basics.RoutePacket(dest, new_cost)
+                        self.send(info, port, flood=True)
+                elif old_cost + self.ports[port] < packet.latency:
                     # if code gets here that means that I have better alternative for sending router
                     # so let's offer it
                     info = basics.RoutePacket(dest, self.table[dest][1])
@@ -102,7 +107,8 @@ class DVRouter(basics.DVRouterBase):
             self.table[packet.src] = (port, self.ports[port], api.current_time())
 
             # send neighboring routers update
-            self.send_info(packet.src, self.ports[port])
+            info = basics.RoutePacket(packet.src, self.ports[port])
+            self.send(info, port, flood=True)
 
         elif packet.dst in self.table and port != self.table[packet.dst][0]:
             # it is neither routePacket nor hostDiscover, lets just forward it
@@ -119,7 +125,3 @@ class DVRouter(basics.DVRouterBase):
         """
         self.log("TABLE: %s", str(self.table))
         pass
-
-    def send_info(self, dest, latency):
-        info = basics.RoutePacket(dest, latency)
-        self.send(info, self.neighboring_routers)
