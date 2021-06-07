@@ -10,7 +10,7 @@ INFINITY = 16
 
 
 class DVRouter(basics.DVRouterBase):
-    NO_LOG = False  # Set to True on an instance to disable its logging
+    NO_LOG = True  # Set to True on an instance to disable its logging
     POISON_MODE = True  # Can override POISON_MODE here
     DEFAULT_TIMER_INTERVAL = 5  # Can override this yourself for testing
     TIMEOUT = 15
@@ -41,8 +41,8 @@ class DVRouter(basics.DVRouterBase):
         self.neighboring_routers.add(port)
 
         # tell new link what I can reach with what costs
-        for host in self.table:
-            info = basics.RoutePacket(host, self.table[host][1]) #1 is index of latency
+        for entity in self.table:
+            info = basics.RoutePacket(entity, self.table[entity][1])  # 1 is index of latency
             self.send(info, port)
 
     def handle_link_down(self, port):
@@ -51,7 +51,25 @@ class DVRouter(basics.DVRouterBase):
 
         The port number used by the link is passed in.
         """
-        pass
+        # remove port from our remembered ports
+        if port in self.ports:
+            self.ports.pop(port)
+        if port in self.neighboring_routers:
+            self.neighboring_routers.remove(port)
+        if port in self.neighboring_hosts:
+            self.neighboring_hosts.remove(port)
+
+        to_be_removed = []  # to not mutate collection while iterating
+        for entity in self.table:  # for entity in entities
+            if port == self.table[entity][0]:  # if I could reach that entity through this port
+                to_be_removed.append(entity)  # remove that route from my table
+                if self.POISON_MODE:
+                    # send poisoned packets to tell other routers that I can't reach that entity anymore
+                    info = basics.RoutePacket(entity, INFINITY)
+                    self.send(info, port, flood=True)  # with flood=True packets are sent from all ports except listed
+
+        for entity in to_be_removed:
+            self.table.pop(entity)
 
     def handle_rx(self, packet, port):
         """
@@ -96,7 +114,7 @@ class DVRouter(basics.DVRouterBase):
                     # so let's offer it
                     info = basics.RoutePacket(dest, self.table[dest][1])
                     self.send(info, port)
-        #neighboring hosts maybe??
+
         elif isinstance(packet, basics.HostDiscoveryPacket):
             # differentiate neighboring hosts from neighboring routers
             self.neighboring_hosts.add(port)
@@ -124,4 +142,17 @@ class DVRouter(basics.DVRouterBase):
         not be a bad place to check for whether any entries have expired.
         """
         self.log("TABLE: %s", str(self.table))
-        pass
+        self.remove_expired()
+
+        for entity in self.table:
+            info = basics.RoutePacket(entity, self.table[entity][1])  # 1 is index of latency
+            self.send(info, self.table[entity][0], flood=True) # sends packet to all neighbors
+
+    def remove_expired(self):
+        expired = []  # to not mutate collection while iterating
+        for entity in self.table:
+            if api.current_time() - self.table[entity][2] > self.TIMEOUT:
+                expired.append(entity)  # save expired entity for later removal
+        for entity in expired:
+            info = basics.RoutePacket(entity, INFINITY) # tell others that I cant reach that entity anymore
+            self.send(info, flood=True)  # sends packet to all neighbors
