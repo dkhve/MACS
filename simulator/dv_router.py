@@ -10,9 +10,9 @@ INFINITY = 16
 
 
 class DVRouter(basics.DVRouterBase):
-    NO_LOG = True  # Set to True on an instance to disable its logging
-    POISON_MODE = True  # Can override POISON_MODE here
-    DEFAULT_TIMER_INTERVAL = 5  # Can override this yourself for testing
+    # NO_LOG = True  # Set to True on an instance to disable its logging
+    # POISON_MODE = True  # Can override POISON_MODE here
+    # DEFAULT_TIMER_INTERVAL = 5  # Can override this yourself for testing
     TIMEOUT = 15
 
     def __init__(self):
@@ -56,6 +56,8 @@ class DVRouter(basics.DVRouterBase):
         for entity in self.table:  # for entity in entities
             if port == self.table[entity][0]:  # if I could reach that entity through this port
                 to_be_removed.append(entity)  # remove that route from my table
+                if entity in self.neighboring_hosts:  # if it is neighboring host
+                    self.neighboring_hosts.remove(entity)  # remove from remembered neighboring hosts
                 if self.POISON_MODE:
                     # send poisoned packets to tell other routers that I can't reach that entity anymore
                     info = basics.RoutePacket(entity, INFINITY)
@@ -153,5 +155,6 @@ class DVRouter(basics.DVRouterBase):
             # should not delete neighboring hosts because they aren't expected to update their paths
             if entity not in self.neighboring_hosts:
                 self.table.pop(entity)
-            info = basics.RoutePacket(entity, INFINITY)  # tell others that I cant reach that entity anymore
-            self.send(info, flood=True)  # sends packet to all neighbors
+            if self.POISON_MODE:
+                info = basics.RoutePacket(entity, INFINITY)  # tell others that I cant reach that entity anymore
+                self.send(info, flood=True)  # sends packet to all neighbors
